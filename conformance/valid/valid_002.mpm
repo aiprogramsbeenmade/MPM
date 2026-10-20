@@ -1,0 +1,6 @@
+# MPM v0.1
+# @meta: {"delimiter":",","encoding":"utf-8","compression":"none"}
+# @schema: [{"name":"id","type":"int"},{"name":"prezzo","type":"float"},{"name":"nome","type":"str"},{"name":"data","type":"date","format":"YYYY-MM-DD"},{"name":"timestamp","type":"datetime"},{"name":"attivo","type":"bool"}]
+id,prezzo,nome,data,timestamp,attivo
+1,3.14,Mario,2024-01-15,2024-01-15T14:30:00,true
+2,-0.5,Luigi,2024-02-20,2024-02-20T09:00:00,false

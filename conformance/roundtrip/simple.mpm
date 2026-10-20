@@ -1,0 +1,6 @@
+# MPM v0.1
+# @meta: {"delimiter":",","encoding":"utf-8","compression":"none"}
+# @schema: [{"name":"id","type":"int","nullable":false},{"name":"nome","type":"str","nullable":false}]
+id,nome
+1,Mario
+2,Luigi

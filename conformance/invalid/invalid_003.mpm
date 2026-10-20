@@ -1,0 +1,5 @@
+# MPM v0.1
+# @meta: {"delimiter":",","encoding":"utf-8","compression":"none"}
+# @schema: [{"name":"a","type":"int"},{"name":"b","type":"int"},{"name":"c","type":"int"}]
+a,b
+1,2

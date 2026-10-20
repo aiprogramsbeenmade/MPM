@@ -1,0 +1,33 @@
+# Ambienti virtuali (Python)
+bin/
+lib/
+include/
+pyvenv.cfg
+.venv/
+venv/
+env/
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE e Editor
+.idea/
+.vscode/
+*.swp
+
+# Dati dei benchmark (pesanti, rigenerabili)
+benchmarks/data/
+
+# Distribuzione / pacchetti
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Sistema operativo
+.DS_Store

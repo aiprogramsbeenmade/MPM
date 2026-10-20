@@ -1,0 +1,6 @@
+# MPM v0.1
+# @meta: {"delimiter":",","encoding":"utf-8","compression":"none"}
+# @schema: [{"name":"tag","type":"str"}]
+tag
+#ciao
+#mondo

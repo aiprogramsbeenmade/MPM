@@ -1,0 +1,7 @@
+# MPM v0.1
+# @meta: {"delimiter":",","encoding":"utf-8","compression":"none"}
+# @schema: [{"name":"testo","type":"str"}]
+testo
+"a
+b"
+"a""b"

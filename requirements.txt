@@ -1,0 +1,9 @@
+# Dipendenze runtime
+zstandard>=0.21.0
+
+# Dipendenze per i test
+pytest>=7.0
+
+# Dipendenze per i benchmark
+pandas>=2.0
+pyarrow>=14.0

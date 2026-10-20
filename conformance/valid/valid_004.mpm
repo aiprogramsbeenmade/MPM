@@ -1,0 +1,7 @@
+# MPM v0.1
+# @meta: {"delimiter":",","encoding":"utf-8","compression":"none"}
+# @schema: [{"name":"id","type":"int"}]
+# @custom: {"author":"MPM Project","note":"questa riga deve essere ignorata"}
+id
+1
+2

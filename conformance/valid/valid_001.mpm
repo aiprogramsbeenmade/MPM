@@ -1,0 +1,6 @@
+# MPM v0.1
+# @meta: {"delimiter":",","encoding":"utf-8","compression":"none"}
+# @schema: [{"name":"nome","type":"str"}]
+nome
+Mario
+Luigi

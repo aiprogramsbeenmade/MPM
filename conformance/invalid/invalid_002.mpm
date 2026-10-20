@@ -1,0 +1,5 @@
+# MPM v0.1
+# @meta: {"delimiter":",", "encoding":}
+# @schema: [{"name":"id","type":"int"}]
+id
+1
