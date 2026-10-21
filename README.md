@@ -21,8 +21,8 @@
   <img src="https://img.shields.io/badge/tests-198%20passed-brightgreen.svg?style=flat-square&logo=pytest&logoColor=white" alt="Tests">
   <img src="https://img.shields.io/badge/version-0.2.0-orange.svg?style=flat-square&logo=semver&logoColor=white" alt="Version">
   <img src="https://img.shields.io/badge/status-prototype-yellow.svg?style=flat-square&logo=statuspage&logoColor=white" alt="Status">
+  <a href="https://pypi.org/project/mpm-format/"><img src="https://img.shields.io/pypi/v/mpm-format.svg?style=flat-square" alt="PyPI version"></a>
 </p>
-
 
 
 ---
