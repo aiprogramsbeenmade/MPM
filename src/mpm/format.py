@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 SUPPORTED_VERSION = "0.1"
+SUPPORTED_READ_VERSIONS = {"0.1", "0.2"}
+SUPPORTED_WRITE_VERSION = "0.2"
 
 _EXTENSION_RE = re.compile(r"^#\s*@(?P<key>[A-Za-z0-9_]+)\s*:\s*(?P<value>.+)$")
 _VERSION_RE = re.compile(r"^#\s*MPM\s+v(?P<version>\d+\.\d+(?:\.\d+)?)\s*$")
@@ -30,6 +32,10 @@ class MPMSchemaError(MPMError):
 
 class MPMVersionError(MPMError):
     """Versione del formato non supportata."""
+
+
+class MPMEncodingError(MPMError):
+    """Errore di codifica/decodifica dei valori MPM (es. escape malformati)."""
 
 
 @dataclass
@@ -52,6 +58,36 @@ class MPMFile:
 
     header: MPMHeader
     rows: list[list[str]] = field(default_factory=list)
+
+
+def _encode_mpm_value(value: str | None) -> str:
+    """Codifica un valore Python per il corpo CSV di MPM (v0.2)."""
+    if value is None:
+        return "\\N"
+    return value.replace("\\", "\\\\")
+
+
+def _decode_mpm_value(raw_value: str) -> str | None:
+    """Decodifica un valore dal corpo CSV di MPM (v0.2)."""
+    if raw_value == "\\N":
+        return None
+
+    out = []
+    i = 0
+    length = len(raw_value)
+    while i < length:
+        if raw_value[i] == "\\":
+            if i + 1 < length and raw_value[i + 1] == "\\":
+                out.append("\\")
+                i += 2
+            else:
+                raise MPMEncodingError(
+                    f"Sequenza di escape non valida alla posizione {i}: {raw_value!r}"
+                )
+        else:
+            out.append(raw_value[i])
+            i += 1
+    return "".join(out)
 
 
 def _parse_version_line(line: str) -> str:
@@ -119,9 +155,10 @@ def parse_header(lines: list[str]) -> tuple[MPMHeader, int]:
         raise MPMHeaderError("File vuoto: manca l'header MPM")
 
     version = _parse_version_line(lines[start])
-    if _version_tuple(version) > _version_tuple(SUPPORTED_VERSION):
+    if version not in SUPPORTED_READ_VERSIONS:
         raise MPMVersionError(
-            f"Versione {version} non supportata (massima: {SUPPORTED_VERSION})"
+            f"Versione {version} non supportata "
+            f"(supportate: {', '.join(sorted(SUPPORTED_READ_VERSIONS))})"
         )
 
     if start + 1 >= len(lines):
@@ -154,15 +191,12 @@ def parse_header(lines: list[str]) -> tuple[MPMHeader, int]:
     return header, idx
 
 
-def _version_tuple(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.split("."))
-
-
 def read_mpm(path: str | Path) -> MPMFile:
     """Legge un file .mpm e restituisce un MPMFile.
 
     L'header MPM è sempre in UTF-8 (i metadati JSON sono ASCII-compatibili).
     Il corpo viene decodificato con l'encoding dichiarato in @meta.encoding.
+    Per la v0.2, i valori del corpo vengono decodificati con _decode_mpm_value.
     """
     raw = Path(path).read_bytes()
 
@@ -207,9 +241,24 @@ def read_mpm(path: str | Path) -> MPMFile:
                 f"Header del corpo {body_header!r} non corrisponde "
                 f"allo schema {schema_names!r}"
             )
-        data_rows = rows[1:]
+        data_rows: list[list[str | None]] = rows[1:]
     else:
         data_rows = []
+
+    # Decodifica solo per v0.2.
+    if header.version == "0.2":
+        decoded_rows: list[list[str | None]] = []
+        for i, row in enumerate(data_rows, start=1):
+            decoded_row: list[str | None] = []
+            for value in row:
+                try:
+                    decoded_row.append(_decode_mpm_value(value))
+                except MPMEncodingError as exc:
+                    raise MPMEncodingError(
+                        f"Riga dati {i}: {exc}"
+                    ) from exc
+            decoded_rows.append(decoded_row)
+        data_rows = decoded_rows
 
     expected = len(header.schema)
     for i, row in enumerate(data_rows, start=1):
@@ -243,7 +292,18 @@ def write_mpm(mpm_file: MPMFile, path: str | Path) -> None:
     Costruisce il contenuto in memoria e lo scrive con una singola
     operazione di I/O. Il file viene aperto con newline="" per garantire
     che i terminatori di riga siano esattamente '\\n' su ogni piattaforma.
+
+    La versione del file determina il comportamento:
+    - v0.1: nessun escaping MPM. None non è ammesso.
+    - v0.2: escaping MPM e supporto per None (\\N).
     """
+    version = mpm_file.header.version
+    if version not in SUPPORTED_READ_VERSIONS:
+        raise MPMVersionError(
+            f"Versione {version} non supportata per la scrittura "
+            f"(supportate: {', '.join(sorted(SUPPORTED_READ_VERSIONS))})"
+        )
+
     header_lines = serialize_header(mpm_file.header)
     delimiter = mpm_file.header.meta["delimiter"]
     encoding = mpm_file.header.meta["encoding"]
@@ -251,9 +311,27 @@ def write_mpm(mpm_file: MPMFile, path: str | Path) -> None:
     buffer = io.StringIO()
     writer = csv.writer(buffer, delimiter=delimiter, lineterminator="\n")
     writer.writerow(mpm_file.header.column_names())
-    writer.writerows(mpm_file.rows)
-    body = buffer.getvalue()
 
+    if version == "0.2":
+        encoded_rows = []
+        for row in mpm_file.rows:
+            encoded_row = []
+            for value in row:
+                encoded_row.append(_encode_mpm_value(value))
+            encoded_rows.append(encoded_row)
+        writer.writerows(encoded_rows)
+    else:
+        # v0.1: nessun escaping, ma None non è ammesso.
+        for row in mpm_file.rows:
+            for value in row:
+                if value is None:
+                    raise MPMEncodingError(
+                        "La versione 0.1 non supporta valori None. "
+                        "Converti il file in v0.2 per usare null."
+                    )
+        writer.writerows(mpm_file.rows)
+
+    body = buffer.getvalue()
     content = "\n".join(header_lines) + "\n" + body
     with Path(path).open("w", encoding=encoding, newline="") as f:
         f.write(content)

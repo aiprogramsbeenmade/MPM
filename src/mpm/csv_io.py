@@ -103,8 +103,16 @@ def csv_to_mpm(
     delimiter: str = ",",
     encoding: str = "utf-8",
     sample_size: int = 1000,
+    null_markers: list[str] | None = None,
 ) -> None:
-    """Converte un file CSV in un file MPM."""
+    """Converte un file CSV in un file MPM.
+
+    Args:
+        ...
+        null_markers: Lista di stringhe che, se trovate in un campo CSV
+            (dopo il parsing), vengono convertite in None (null MPM).
+            Default: None (nessun marcatore, i campi vuoti restano stringhe vuote).
+    """
     if schema is None:
         header, rows, schema = _read_csv_and_infer(
             input_path, delimiter=delimiter, encoding=encoding,
@@ -116,13 +124,17 @@ def csv_to_mpm(
         )
         schema_names = [col["name"] for col in schema]
         if schema_names != header:
-            raise MPMSchemaError(
-                f"Lo schema {schema_names!r} non corrisponde "
-                f"all'header del CSV {header!r}"
-            )
+            raise MPMSchemaError(...)
+
+    # Applica i marcatori di null, se specificati.
+    if null_markers:
+        rows = [
+            [None if v in null_markers else v for v in row]
+            for row in rows
+        ]
 
     mpm_header = MPMHeader(
-        version="0.1",
+        version="0.2",
         meta={
             "delimiter": delimiter,
             "encoding": encoding,
@@ -138,12 +150,15 @@ def mpm_to_csv(
     input_path: str | Path,
     output_path: str | Path,
     include_header: bool = True,
+    null_value: str = "",
 ) -> None:
     """Converte un file MPM in un file CSV.
 
-    Costruisce il contenuto in memoria e lo scrive con una singola
-    operazione di I/O. Il file viene aperto con newline="" per garantire
-    che i terminatori di riga siano esattamente '\\n' su ogni piattaforma.
+    Args:
+        ...
+        null_value: Stringa usata per esportare i valori None.
+            Default: "" (campo vuoto). Attenzione: con il default,
+            null e stringhe vuote diventano indistinguibili nel CSV.
     """
     mpm = read_mpm(input_path)
     delimiter = mpm.header.meta["delimiter"]
@@ -153,7 +168,13 @@ def mpm_to_csv(
     writer = csv.writer(buffer, delimiter=delimiter, lineterminator="\n")
     if include_header:
         writer.writerow(mpm.header.column_names())
-    writer.writerows(mpm.rows)
+
+    for row in mpm.rows:
+        csv_row = [
+            null_value if v is None else v
+            for v in row
+        ]
+        writer.writerow(csv_row)
 
     with Path(output_path).open("w", encoding=encoding, newline="") as f:
         f.write(buffer.getvalue())

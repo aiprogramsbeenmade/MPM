@@ -31,3 +31,4 @@ dist/
 
 # Sistema operativo
 .DS_Store
+pyproject.toml

@@ -16,6 +16,8 @@ from mpm.format import (
     MPMFile,
     MPMHeader,
     MPMSchemaError,
+    SUPPORTED_READ_VERSIONS,
+    MPMVersionError,
     read_mpm,
     write_mpm,
 )
@@ -24,6 +26,10 @@ MAGIC = b"MPMZ"
 VERSION = 0x01
 MAX_DECOMPRESSED_BLOCK = 100 * 1024 * 1024  # 100 MB
 DEFAULT_BLOCK_SIZE = 10_000  # righe per blocco
+MAX_MPMZ_FILE_SIZE = 256 * 1024 * 1024   # 256 MiB
+MAX_HEADER_JSON_SIZE = 1 * 1024 * 1024  # 1 MiB
+MAX_BLOCKS = 10_000
+MAX_TOTAL_DECOMPRESSED_SIZE = 256 * 1024 * 1024  # 256 MiB
 
 
 class MPMZError(MPMError):
@@ -38,6 +44,7 @@ class MPMZHeader:
     schema: list[dict[str, Any]]
     blocks: int
     original_size: int
+    original_version: str = "0.1"  # default per retrocompatibilità
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +52,7 @@ class MPMZHeader:
             "schema": self.schema,
             "blocks": self.blocks,
             "original_size": self.original_size,
+            "original_version": self.original_version,
         }
 
     @classmethod
@@ -52,15 +60,45 @@ class MPMZHeader:
         for required in ("meta", "schema", "blocks", "original_size"):
             if required not in data:
                 raise MPMZError(f"Header JSON manca il campo {required!r}")
-        if data["blocks"] < 0:
+
+        blocks = data["blocks"]
+        if isinstance(blocks, bool) or not isinstance(blocks, int):
+            raise MPMZError("Header JSON: 'blocks' deve essere un intero")
+        if blocks < 0:
             raise MPMZError("Header JSON: 'blocks' non può essere negativo")
-        if data["original_size"] < 0:
+        if blocks > MAX_BLOCKS:
+            raise MPMZError(
+                f"Header JSON: 'blocks' = {blocks} supera il limite "
+                f"di {MAX_BLOCKS}"
+            )
+
+        original_size = data["original_size"]
+        if isinstance(original_size, bool) or not isinstance(original_size, int):
+            raise MPMZError("Header JSON: 'original_size' deve essere un intero")
+        if original_size < 0:
             raise MPMZError("Header JSON: 'original_size' non può essere negativo")
+        if original_size > MAX_TOTAL_DECOMPRESSED_SIZE:
+            raise MPMZError(
+                f"Header JSON: 'original_size' = {original_size} supera "
+                f"il limite di {MAX_TOTAL_DECOMPRESSED_SIZE}"
+            )
+
+        # original_version è opzionale per retrocompatibilità.
+        original_version = data.get("original_version", "0.1")
+        if not isinstance(original_version, str):
+            raise MPMZError("Header JSON: 'original_version' deve essere una stringa")
+        if original_version not in SUPPORTED_READ_VERSIONS:
+            raise MPMVersionError(
+                f"Versione {original_version} non supportata "
+                f"(supportate: {', '.join(sorted(SUPPORTED_READ_VERSIONS))})"
+            )
+
         return cls(
             meta=data["meta"],
             schema=data["schema"],
-            blocks=data["blocks"],
-            original_size=data["original_size"],
+            blocks=blocks,
+            original_size=original_size,
+            original_version=original_version,
         )
 
 
@@ -75,19 +113,28 @@ class MPMZFile:
 def _serialize_mpm_body(mpm: MPMFile) -> bytes:
     """Serializza il corpo CSV di un MPMFile in bytes (senza header MPM)."""
     import csv
+    from mpm.format import _encode_mpm_value
 
     buffer = io.StringIO()
     delimiter = mpm.header.meta["delimiter"]
     writer = csv.writer(buffer, delimiter=delimiter, lineterminator="\n")
     writer.writerow(mpm.header.column_names())
-    for row in mpm.rows:
-        writer.writerow(row)
+
+    if mpm.header.version == "0.2":
+        encoded_rows = []
+        for row in mpm.rows:
+            encoded_rows.append([_encode_mpm_value(v) for v in row])
+        writer.writerows(encoded_rows)
+    else:
+        writer.writerows(mpm.rows)
+
     return buffer.getvalue().encode(mpm.header.meta["encoding"])
 
 
-def _parse_mpm_body(body: bytes, header: MPMHeader) -> list[list[str]]:
+def _parse_mpm_body(body: bytes, header: MPMHeader) -> list[list[str | None]]:
     """Parsa il corpo CSV (bytes) e restituisce le righe dati."""
     import csv
+    from mpm.format import _decode_mpm_value
 
     text = body.decode(header.meta["encoding"])
     reader = csv.reader(io.StringIO(text), delimiter=header.meta["delimiter"])
@@ -101,17 +148,23 @@ def _parse_mpm_body(body: bytes, header: MPMHeader) -> list[list[str]]:
             f"Header del corpo {body_header!r} non corrisponde "
             f"allo schema {schema_names!r}"
         )
-    return rows[1:]
+    data_rows: list[list[str | None]] = rows[1:]
+
+    if header.version == "0.2":
+        decoded_rows: list[list[str | None]] = []
+        for row in data_rows:
+            decoded_row: list[str | None] = []
+            for value in row:
+                decoded_row.append(_decode_mpm_value(value))
+            decoded_rows.append(decoded_row)
+        data_rows = decoded_rows
+
+    return data_rows
 
 
 def _split_into_blocks(data: bytes, block_size: int) -> list[bytes]:
-    """Divide il corpo CSV in blocchi di al massimo block_size righe.
-
-    Nota: la divisione avviene sulle righe, non sui byte, per garantire
-    che ogni blocco contenga righe CSV complete.
-    """
+    """Divide il corpo CSV in blocchi di al massimo block_size righe."""
     lines = data.split(b"\n")
-    # Rimuove l'ultima riga vuota se il file termina con '\n'.
     if lines and lines[-1] == b"":
         lines = lines[:-1]
 
@@ -123,20 +176,12 @@ def _split_into_blocks(data: bytes, block_size: int) -> list[bytes]:
 
 
 def compress_mpm(mpm: MPMFile, block_size: int = DEFAULT_BLOCK_SIZE) -> bytes:
-    """Comprime un MPMFile in bytes nel formato .mpmz.
-
-    Args:
-        mpm: il file MPM da comprimere.
-        block_size: numero di righe per blocco (default 10000).
-
-    Returns:
-        I bytes del file .mpmz.
-    """
+    """Comprime un MPMFile in bytes nel formato .mpmz."""
     if block_size <= 0:
         raise MPMZError("block_size deve essere positivo")
 
     body = _serialize_mpm_body(mpm)
-    cctx = zstd.ZstdCompressor()
+    cctx = zstd.ZstdCompressor(write_checksum=True)
     raw_blocks = _split_into_blocks(body, block_size)
     compressed_blocks = [cctx.compress(raw) for raw in raw_blocks]
 
@@ -148,6 +193,7 @@ def compress_mpm(mpm: MPMFile, block_size: int = DEFAULT_BLOCK_SIZE) -> bytes:
         schema=mpm.header.schema,
         blocks=len(compressed_blocks),
         original_size=len(body),
+        original_version=mpm.header.version,
     )
     header_json = json.dumps(header.to_dict(), ensure_ascii=False).encode("utf-8")
 
@@ -164,17 +210,12 @@ def compress_mpm(mpm: MPMFile, block_size: int = DEFAULT_BLOCK_SIZE) -> bytes:
 
 
 def decompress_mpmz(data: bytes) -> MPMFile:
-    """Decomprime i bytes di un file .mpmz in un MPMFile.
-
-    Args:
-        data: i bytes del file .mpmz.
-
-    Returns:
-        Un MPMFile con header e righe.
-
-    Raises:
-        MPMZError: se il file è malformato.
-    """
+    """Decomprime i bytes di un file .mpmz in un MPMFile."""
+    if len(data) > MAX_MPMZ_FILE_SIZE:
+        raise MPMZError(
+            f"File .mpmz troppo grande: {len(data)} byte "
+            f"(massimo: {MAX_MPMZ_FILE_SIZE} byte)"
+        )
     if len(data) < 9:
         raise MPMZError("File .mpmz troppo corto")
     if data[:4] != MAGIC:
@@ -183,6 +224,11 @@ def decompress_mpmz(data: bytes) -> MPMFile:
     if version != VERSION:
         raise MPMZError(f"Versione .mpmz non supportata: {version}")
     (header_len,) = struct.unpack(">I", data[5:9])
+    if header_len > MAX_HEADER_JSON_SIZE:
+        raise MPMZError(
+            f"Header JSON troppo grande: {header_len} byte "
+            f"(massimo: {MAX_HEADER_JSON_SIZE} byte)"
+        )
     if len(data) < 9 + header_len:
         raise MPMZError("Header JSON troncato")
     header_json = data[9 : 9 + header_len]
@@ -195,6 +241,7 @@ def decompress_mpmz(data: bytes) -> MPMFile:
     offset = 9 + header_len
     dctx = zstd.ZstdDecompressor()
     body_parts: list[bytes] = []
+    total_decompressed = 0
     for i in range(header.blocks):
         if offset + 8 > len(data):
             raise MPMZError(f"Blocco {i}: header troncato")
@@ -204,6 +251,13 @@ def decompress_mpmz(data: bytes) -> MPMFile:
             raise MPMZError(
                 f"Blocco {i}: dimensione originale {orig_size} "
                 f"supera il limite di {MAX_DECOMPRESSED_BLOCK} byte"
+            )
+        total_decompressed += orig_size
+        if total_decompressed > MAX_TOTAL_DECOMPRESSED_SIZE:
+            raise MPMZError(
+                f"Somma cumulativa delle dimensioni dei blocchi "
+                f"({total_decompressed}) supera il limite di "
+                f"{MAX_TOTAL_DECOMPRESSED_SIZE} byte"
             )
         if offset + comp_size > len(data):
             raise MPMZError(f"Blocco {i}: dati troncati")
@@ -231,14 +285,17 @@ def decompress_mpmz(data: bytes) -> MPMFile:
             f"Dimensione totale {len(body)} diversa da original_size "
             f"{header.original_size}"
         )
+    if total_decompressed != header.original_size:
+        raise MPMZError(
+            f"Somma delle dimensioni dei blocchi ({total_decompressed}) "
+            f"diversa da original_size ({header.original_size})"
+        )
 
-    # Ripristina i metadati originali del file .mpm: la compressione
-    # è una proprietà del contenitore .mpmz, non del file .mpm.
     meta = dict(header.meta)
     meta["compression"] = "none"
     meta.pop("compression_block", None)
     mpm_header = MPMHeader(
-        version="0.1",
+        version=header.original_version,
         meta=meta,
         schema=header.schema,
     )
@@ -248,7 +305,18 @@ def decompress_mpmz(data: bytes) -> MPMFile:
 
 def read_mpmz(path: str | Path) -> MPMFile:
     """Legge un file .mpmz e restituisce un MPMFile."""
-    data = Path(path).read_bytes()
+    p = Path(path)
+    if p.stat().st_size > MAX_MPMZ_FILE_SIZE:
+        raise MPMZError(
+            f"File .mpmz troppo grande: {p.stat().st_size} byte "
+            f"(massimo: {MAX_MPMZ_FILE_SIZE} byte)"
+        )
+    data = p.read_bytes()
+    if len(data) > MAX_MPMZ_FILE_SIZE:
+        raise MPMZError(
+            f"File .mpmz troppo grande: {len(data)} byte "
+            f"(massimo: {MAX_MPMZ_FILE_SIZE} byte)"
+        )
     return decompress_mpmz(data)
 
 

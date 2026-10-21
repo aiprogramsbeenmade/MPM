@@ -1,18 +1,16 @@
-# MPM — Minimal Portable Mapping
+ # MPM — Minimal Portable Mapping
+ 
+ **Specifica del Formato, Versione 0.1**
+ 
+ * **Stato:** Bozza (Draft)
+ * **Data:** 2026-10-20
+ * **Autore:** MPM Project
+-* **Licenza della specifica:** CC BY 4.0
+-* **Licenza del codice di riferimento:** MIT
++* **Licenza della specifica:** Creative Commons Attribution 4.0 International (CC BY 4.0). Il testo legale integrale è in `LICENSE-SPEC`.
++* **Licenza del codice di riferimento:** MIT. Il testo legale integrale è in `LICENSE`.
++* **Brevetti e marchi:** La licenza CC BY 4.0 non concede diritti brevettuali o sui marchi. Gli autori non rivendicano brevetti sull'implementazione del formato MPM.
 
-**Specifica del Formato, Versione 0.1**
-
-
-
-* **Stato:** Bozza (Draft)
-
-* **Data:** 2026-10-20
-
-* **Autore:** MPM Project
-
-* **Licenza della specifica:** CC BY 4.0
-
-* **Licenza del codice di riferimento:** MIT
 
 
 
@@ -57,7 +55,6 @@ MPM non sostituisce Parquet o Arrow per l'analisi di grandi volumi di dati. Il s
 | **Schema** | La descrizione delle colonne del file, contenuta nell'header. |
 | **Blocco** | Un insieme contiguo di righe CSV, unità di compressione in MPMZ. |
 | **Implementazione conforme** | Un software che rispetta tutti i requisiti di questa specifica. |
-
 
 
 Le parole chiave **DEVE**, **NON DEVE**, **DOVREBBE**, **NON DOVREBBE**, **PUÒ** sono da interpretarsi secondo la **RFC 2119**.
@@ -201,15 +198,10 @@ L'oggetto JSON in `@meta` **DEVE** contenere i seguenti campi:
 
 
 | Campo | Tipo | Obbligatorio | Descrizione | Default |
-
 | :--- | :--- | :---: | :--- | :---: |
-
 | `delimiter` | stringa (1 carattere) | Sì | Separatore di campo | — |
-
 | `encoding` | stringa | Sì | Codifica del testo | — |
-
 | `compression` | stringa | Sì | `none` per `.mpm`, `zstd` per `.mpmz` | — |
-
 | `compression_block` | intero positivo | No | Righe per blocco (solo se compression diverso da `none`) | `10000` |
 
 
@@ -235,17 +227,11 @@ L'array JSON in `@schema` **DEVE** contenere un oggetto per colonna. Ogni oggett
 
 
 | Campo | Tipo | Obbligatorio | Descrizione |
-
 | :--- | :--- | :---: | :--- |
-
 | `name` | stringa | Sì | Nome della colonna (univoco nel file) |
-
 | `type` | stringa | Sì | Uno tra: `int`, `float`, `str`, `date`, `datetime`, `bool` |
-
 | `nullable` | booleano | No | Se la colonna può contenere valori vuoti (default: `true`) |
-
 | `format` | stringa | No | Formato per date/datetime (es. `YYYY-MM-DD`) |
-
 
 
 ### 5.1 Tipi e Validazione
@@ -271,22 +257,120 @@ I tipi sono hint, non obblighi. Un'implementazione conforme:
 
 
 | Tipo | Formato atteso | Esempio |
-
 | :--- | :--- | :--- |
-
 | `int` | Intero decimale, senza separatori | `42`, `-7` |
-
 | `float` | Decimale con punto come separatore | `3.14`, `-0.001` |
-
 | `str` | Qualsiasi stringa UTF-8 | `ciao` |
-
 | `date` | Secondo `format` (default `YYYY-MM-DD`) | `2024-01-15` |
-
 | `datetime` | ISO 8601 (default `YYYY-MM-DDTHH:MM:SS`) | `2024-01-15T14:30:00` |
-
 | `bool` | `true`/`false` (case-insensitive) | `true`, `FALSE` |
 
 
+## 5.3 Rappresentazione di null ed Escaping (MPM v0.2)
+
+
+
+A partire dalla versione **0.2** del formato MPM testuale, i valori `null` e i caratteri di escape sono rappresentati come segue.
+
+
+
+---
+
+
+
+### 5.3.1 Il marcatore `null`
+
+
+
+Il valore `null` è rappresentato esclusivamente dalla sequenza di due caratteri `\N` (backslash seguito da N maiuscola), **non quotata** nel file CSV.
+
+
+
+Qualsiasi altro valore, inclusa la stringa vuota `""` (campo CSV vuoto), è un valore non nullo.
+
+
+
+---
+
+
+
+### 5.3.2 Escaping dei backslash
+
+
+
+Ogni backslash (`\`) presente in un valore non nullo **DEVE** essere codificato come `\\` (doppio backslash) prima della scrittura.
+
+
+
+Pertanto:
+
+* La stringa letterale `\N` è codificata come `\\N`.
+
+* La stringa letterale `\` è codificata come `\\`.
+
+* La stringa letterale `\\` è codificata come `\\\\`.
+
+
+
+---
+
+
+
+### 5.3.3 Decodifica
+
+
+
+Dopo il parsing CSV, il decoder **DEVE** applicare le seguenti regole, in una singola passata:
+
+
+
+1. Se il campo (dopo il parsing CSV) è esattamente `\N`, il valore è `null`.
+
+2. Se il campo contiene la sequenza `\\`, questa viene sostituita con un singolo backslash (`\`). La sostituzione **NON DEVE** essere ricorsiva.
+
+3. Un backslash isolato o seguito da un carattere diverso da `\` (eccetto il caso esatto `\N`) costituisce un errore di codifica.
+
+
+
+---
+
+
+
+### 5.3.4 Ordine delle operazioni
+
+
+
+* **Scrittura:** il writer applica prima l'escaping MPM (sostituzione di `\` con `\\`, e `null` con `\N`), poi il quoting CSV (secondo **RFC 4180**).
+
+* **Lettura:** il reader applica prima il parsing CSV (secondo **RFC 4180**), poi la decodifica MPM (secondo *Sezione 5.3.3*).
+
+
+
+---
+
+
+
+### 5.3.5 Gestione degli errori
+
+
+
+Un valore che viola le regole della *Sezione 5.3.3* è un errore di codifica. Il file è considerato non conforme.
+
+
+
+La conformità della codifica è distinta dalla validazione dei tipi: un file può essere conforme alla codifica ma contenere valori che non rispettano lo schema dichiarato. In tal caso, il file è conforme, ma il tool di validazione (`mpm validate`) segnalerà le anomalie di tipo.
+
+
+
+---
+
+
+
+### 5.3.6 Distinzione tra `null` e stringa vuota
+
+
+
+Il valore `null` è distinto dalla stringa vuota per qualsiasi tipo di colonna. La stringa vuota è un valore non nullo di tipo `str` (o un valore vuoto per altri tipi, se `nullable` è `true`).
 
 ---
 
@@ -330,30 +414,26 @@ L'header JSON contiene i metadati del file MPM originale, più i campi specifici
 
 ### 6.2 Blocchi Compressi
 
-
-
 Ogni blocco ha la seguente struttura:
-
 * **Dimensione originale:** 4 byte big-endian
-
 * **Dimensione compressa:** 4 byte big-endian
-
 * **Dati compressi con Zstandard**
 
-
-
 **Regole:**
-
 * I blocchi **DEVONO** essere compressi con Zstandard (RFC 8878).
-
 * Ogni blocco **DEVE** contenere al massimo `compression_block` righe CSV.
-
 * L'ultimo blocco **PUÒ** contenere meno righe.
-
 * La concatenazione dei blocchi decompressi **DEVE** produrre esattamente il corpo CSV del file MPM originale (più l'header MPM, che è nell'header JSON).
-
 * La decompressione **DEVE** essere lossless.
 
+#### 6.2.1 Checksum Zstandard
+
+* I writer MPMZ **DOVREBBERO** abilitare il checksum nativo Zstandard nei nuovi frame.
+* I reader MPMZ **DEVONO** accettare frame Zstandard validi con o senza checksum.
+* Quando un checksum è presente, il reader **DEVE** verificarlo.
+* Un frame con checksum non valido **DEVE** essere rifiutato.
+
+Il checksum Zstandard protegge dall'alterazione accidentale dei dati durante la trasmissione o l'archiviazione. **Non** fornisce autenticazione o integrità crittografica: non protegge da attacchi intenzionali. L'abilitazione del checksum **NON** richiede una nuova versione del contenitore MPMZ (il byte di versione rimane `0x01`). I file legacy senza checksum restano validi e leggibili.
 
 
 ### 6.3 Retrocompatibilità
@@ -459,37 +539,21 @@ La suite di conformità è un insieme di file di test che ogni implementazione *
 
 
 | ID | Categoria | Descrizione |
-
 | :--- | :--- | :--- |
-
 | `valid_001` | `valid` | File MPM minimo con una colonna `str` |
-
 | `valid_002` | `valid` | File MPM con tutti i tipi supportati |
-
 | `valid_003` | `valid` | File MPM multi-blocco (per testare `.mpmz` con 3 blocchi) |
-
 | `valid_004` | `valid` | File MPM con riga di estensione non riconosciuta |
-
 | `invalid_001` | `invalid` | Header MPM mancante |
-
 | `invalid_002` | `invalid` | `@meta` non è JSON valido |
-
 | `invalid_003` | `invalid` | Numero di colonne nello schema diverso dal corpo |
-
 | `invalid_004` | `invalid` | Magic number errato in `.mpmz` |
-
 | `roundtrip_001` | `roundtrip` | CSV in MPM in CSV (identico all'originale) |
-
 | `roundtrip_002` | `roundtrip` | MPM in MPMZ in MPM (identico all'originale) |
-
 | `roundtrip_003` | `roundtrip` | MPM in CSV in MPM (identico all'originale) |
-
 | `edge_001` | `edge_cases` | Campo contenente `#` all'inizio |
-
 | `edge_002` | `edge_cases` | Campo contenente `\n` e doppio apice |
-
 | `edge_003` | `edge_cases` | File vuoto (solo header, nessuna riga) |
-
 | `edge_004` | `edge_cases` | Encoding `latin-1` |
 
 
