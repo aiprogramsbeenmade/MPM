@@ -289,13 +289,8 @@ def serialize_header(header: MPMHeader) -> list[str]:
 def write_mpm(mpm_file: MPMFile, path: str | Path) -> None:
     """Scrive un MPMFile su disco in formato .mpm.
 
-    Costruisce il contenuto in memoria e lo scrive con una singola
-    operazione di I/O. Il file viene aperto con newline="" per garantire
-    che i terminatori di riga siano esattamente '\\n' su ogni piattaforma.
-
-    La versione del file determina il comportamento:
-    - v0.1: nessun escaping MPM. None non è ammesso.
-    - v0.2: escaping MPM e supporto per None (\\N).
+    L'header è scritto in UTF-8. Il corpo è scritto con l'encoding
+    dichiarato in @meta.encoding.
     """
     version = mpm_file.header.version
     if version not in SUPPORTED_READ_VERSIONS:
@@ -308,20 +303,8 @@ def write_mpm(mpm_file: MPMFile, path: str | Path) -> None:
     delimiter = mpm_file.header.meta["delimiter"]
     encoding = mpm_file.header.meta["encoding"]
 
-    buffer = io.StringIO()
-    writer = csv.writer(buffer, delimiter=delimiter, lineterminator="\n")
-    writer.writerow(mpm_file.header.column_names())
-
-    if version == "0.2":
-        encoded_rows = []
-        for row in mpm_file.rows:
-            encoded_row = []
-            for value in row:
-                encoded_row.append(_encode_mpm_value(value))
-            encoded_rows.append(encoded_row)
-        writer.writerows(encoded_rows)
-    else:
-        # v0.1: nessun escaping, ma None non è ammesso.
+    # Controllo: v0.1 non supporta None.
+    if version == "0.1":
         for row in mpm_file.rows:
             for value in row:
                 if value is None:
@@ -329,9 +312,48 @@ def write_mpm(mpm_file: MPMFile, path: str | Path) -> None:
                         "La versione 0.1 non supporta valori None. "
                         "Converti il file in v0.2 per usare null."
                     )
+
+    # Costruisci l'header come stringa.
+    header_text = "\n".join(header_lines) + "\n"
+
+    # Costruisci il corpo come stringa.
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=delimiter, lineterminator="\n")
+    writer.writerow(mpm_file.header.column_names())
+
+    if mpm_file.header.version == "0.2":
+        encoded_rows = [
+            [_encode_mpm_value(v) for v in row]
+            for row in mpm_file.rows
+        ]
+        writer.writerows(encoded_rows)
+    else:
         writer.writerows(mpm_file.rows)
 
-    body = buffer.getvalue()
-    content = "\n".join(header_lines) + "\n" + body
-    with Path(path).open("w", encoding=encoding, newline="") as f:
-        f.write(content)
+    body_text = buffer.getvalue()
+
+    # Scrivi il file: header UTF-8, corpo con encoding dichiarato.
+    try:
+        header_bytes = header_text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise MPMError(f"Impossibile codificare l'header in UTF-8: {exc}") from exc
+
+    try:
+        body_bytes = body_text.encode(encoding)
+    except LookupError as exc:
+        raise MPMError(f"Encoding non riconosciuto: {encoding!r}") from exc
+    except UnicodeEncodeError as exc:
+        raise MPMError(
+            f"Impossibile codificare il corpo con encoding {encoding!r}: {exc}"
+        ) from exc
+
+    # Scrivi in modo atomico: prima su file temporaneo, poi rinomina.
+    tmp_path = Path(str(path) + ".tmp")
+    try:
+        with tmp_path.open("wb") as f:
+            f.write(header_bytes)
+            f.write(body_bytes)
+        tmp_path.replace(path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise

@@ -7,3 +7,5 @@ pytest>=7.0
 # Dipendenze per i benchmark
 pandas>=2.0
 pyarrow>=14.0
+
+build

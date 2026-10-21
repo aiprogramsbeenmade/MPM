@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mpm"
-version = "0.1.0"
-description = "MPM — Minimal Portable Mapping: a CSV 2.0 format"
+version = "0.2.0"
+description = "MPM — Minimal Portable Mapping: un formato tabellare aperto, tipizzato e comprimibile"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
-authors = [{ name = "MPM Project" }]
+license = "MIT"
+license-files = ["LICENSE", "LICENSE-SPEC"]
+authors = [{ name = "Matteo Proietti Micozzi" }]
 dependencies = [
     "zstandard>=0.21.0",
 ]
