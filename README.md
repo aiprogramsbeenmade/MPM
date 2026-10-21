@@ -374,3 +374,7 @@ La directory `conformance/` contiene i file di test che ogni implementazione dev
 
 
 > La licenza CC BY 4.0 non concede diritti brevettuali o sui marchi. Gli autori non rivendicano brevetti sull'implementazione del formato MPM.
+ 
+
+## Note sull'autore
+> MPM sta per **Minimal Portable Mapping**, ma il nome è anche un omaggio alle iniziali del suo creatore, **Matteo Proietti Micozzi**.
